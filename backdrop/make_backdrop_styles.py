@@ -1,7 +1,9 @@
 """S2S Fit event photo backdrops: cinematic style variations.
 
 Usage: python3 make_backdrop_styles.py <logo.png> <out_dir> <size_px> <style|all>
-styles: arena, inferno, smoke, gate, kinetic, concrete
+styles: arena, inferno, smoke, gate, kinetic, concrete,
+        smoke_ember, smoke_spotlight, smoke_rising, smoke_crimson, smoke_silver, smoke_rays
+        (comma-separate several, "smoke_*" for the smoke family, or "all")
 """
 import sys, os, math
 import numpy as np
@@ -341,16 +343,164 @@ def style_concrete(logo, N):
     return footer(c, N)
 
 
+
+# ---------------- smoke family ----------------
+def afbm(bx, by, octaves, seed):
+    """anisotropic fBm: bx x by base cells (by < bx -> tall vertical wisps)."""
+    out, amp, tot = np.zeros((n, n), np.float32), 1.0, 0.0
+    for o in range(octaves):
+        k = 2 ** o
+        r = np.random.default_rng(seed + o).random((by * k, bx * k)).astype(np.float32)
+        out += amp * np.asarray(Image.fromarray(r, "F").resize((n, n), Image.BICUBIC))
+        tot += amp
+        amp *= 0.5
+    return out / tot
+
+
+def smoke_density(seed, base=4, k=420, sym=0.4, thresh=0.36, gain=2.8, gamma=1.4, aniso=None):
+    a, b = fbm(3, 4, seed), fbm(3, 4, seed + 1)
+    if aniso:
+        f1, f2 = afbm(aniso[0], aniso[1], 6, seed + 2), afbm(aniso[0] * 2, aniso[1] * 2, 5, seed + 3)
+    else:
+        f1, f2 = fbm(base, 6, seed + 2), fbm(base + 2, 5, seed + 3)
+    raw = 0.6 * warp(f1, a, b, k) + 0.4 * warp(f2, b, a, k * 0.6)
+    raw = (1 - sym) * raw + sym * raw[:, ::-1]
+    return np.clip((raw - thresh) * gain, 0, 1) ** gamma
+
+
+def smoke_ember(logo, N):
+    """Red backlit smoke with glowing embers drifting up from a hot floor."""
+    x, y = grid()
+    dens = smoke_density(141, sym=0.2, thresh=0.34, gain=3.0, gamma=1.3)
+    back = gauss2(x, y, 0.5, 0.42, 0.55, 0.40)
+    floor = np.exp(-((y - 1.0) / 0.22) ** 2) * np.exp(-((x - 0.5) / 0.7) ** 2)
+    img = np.full((n, n, 3), 3.0, np.float32)
+    img += (dens * back)[..., None] * RED * 0.85
+    img += (dens * floor)[..., None] * np.array([255, 110, 70]) * 0.55
+    img += floor[..., None] * RED * 0.10
+    img += (blur(dens * back, 18))[..., None] * RED * 0.16
+    img = vignette(img, x, y, amt=0.85)
+    c = to_canvas(img, N)
+
+    def reg(px, py):
+        return min(1.0, 0.15 + py ** 2.5) * math.exp(-((px - 0.5) / 0.5) ** 2)
+    c = Image.alpha_composite(c, particles(N, 1100, reg, 19, color=(255, 120, 70), size=(0.0005, 0.0020), alpha=(60, 240)))
+    c, box = place_logo(c, logo, N, 0.50, 0.38, halo=0.30)
+    c = bar_lines(c, N, box, alpha=60)
+    return footer(c, N)
+
+
+def smoke_spotlight(logo, N):
+    """Overhead spotlight carving a white shaft through red-lit smoke."""
+    x, y = grid()
+    dens = smoke_density(151, sym=0.35, thresh=0.32, gain=2.4)
+    top = (0.5, -0.12)
+    half = 0.04 + 0.30 * np.clip(y - top[1], 0, None)
+    cone = np.clip((half - np.abs(x - 0.5)) / (0.06 + 0.05 * y), 0, 1)
+    cone *= 0.6 + 0.4 * rays(x, y, *top, 200, 5, 2.0)
+    back = gauss2(x, y, 0.5, 0.40, 0.50, 0.35)
+    img = np.full((n, n, 3), 3.0, np.float32)
+    img += (dens * back * (1 - 0.6 * cone))[..., None] * RED * 0.55
+    img += ((0.25 + 0.75 * dens) * cone)[..., None] * WARM * 0.42
+    img += 50 * gauss2(x, y, 0.5, 0.97, 0.30, 0.045)[..., None] * (WARM / 255)
+    img += (blur(dens * back, 18))[..., None] * RED * 0.12
+    img = vignette(img, x, y, amt=0.85)
+    c = to_canvas(img, N)
+    c, box = place_logo(c, logo, N, 0.48, 0.37, halo=0.28)
+    c = streak(c, N, box[4], alpha=110)
+    return footer(c, N)
+
+
+def smoke_rising(logo, N):
+    """Tall smoke columns rising from a red-lit floor, fading into black above the logo."""
+    x, y = grid()
+    dens = smoke_density(163, k=260, sym=0.1, thresh=0.33, gain=2.6, aniso=(9, 2))
+    rise = np.clip((y - 0.15) / 0.85, 0, 1) ** 1.2
+    under = np.exp(-((y - 1.05) / 0.50) ** 2) * (0.55 + 0.45 * np.exp(-((x - 0.5) / 0.5) ** 2))
+    img = np.full((n, n, 3), 3.0, np.float32)
+    img += (dens * rise * under)[..., None] * RED * 0.70
+    img += (dens * rise * under ** 2)[..., None] * np.array([255, 150, 120]) * 0.12
+    img += (blur(dens * rise * under, 16))[..., None] * RED * 0.2
+    img += gauss2(x, y, 0.5, 0.36, 0.30, 0.18)[..., None] * 16
+    img = vignette(img, x, y, cy=0.5, amt=0.75)
+    c = to_canvas(img, N)
+    c, box = place_logo(c, logo, N, 0.50, 0.34, halo=0.25)
+    c = bar_lines(c, N, box, alpha=55)
+    return footer(c, N)
+
+
+def smoke_crimson(logo, N):
+    """Dense, saturated crimson storm filling the frame; deep shadow pockets."""
+    x, y = grid()
+    dens = smoke_density(171, base=3, k=520, sym=0.3, thresh=0.28, gain=2.2, gamma=1.2)
+    dens2 = smoke_density(175, base=6, k=260, sym=0.2, thresh=0.40, gain=3.0, gamma=1.8)
+    light = 0.35 + 0.65 * gauss2(x, y, 0.5, 0.40, 0.65, 0.50)
+    img = np.full((n, n, 3), 4.0, np.float32)
+    img += (dens * light)[..., None] * np.array([200, 28, 30]) * 0.85
+    img += (dens2 * light)[..., None] * np.array([255, 90, 80]) * 0.45
+    img *= (0.55 + 0.45 * (1 - smoke_density(179, base=5, thresh=0.45, gain=2.0)))[..., None]
+    img += gauss2(x, y, 0.5, 0.38, 0.30, 0.16)[..., None] * RED * 0.12
+    img = vignette(img, x, y, amt=0.8)
+    c = to_canvas(img, N)
+    plate = Image.new("L", (N, N), 0)
+    ImageDraw.Draw(plate).ellipse([int(N * 0.20), int(N * 0.27), int(N * 0.80), int(N * 0.50)], fill=120)
+    plate = plate.filter(ImageFilter.GaussianBlur(N * 0.05))
+    c = Image.alpha_composite(c, Image.merge("RGBA", (*Image.new("RGB", (N, N), (0, 0, 0)).split(), plate)))
+    c, box = place_logo(c, logo, N, 0.50, 0.38, halo=0.32)
+    return footer(c, N)
+
+
+def smoke_silver(logo, N):
+    """Monochrome silver smoke on black; red kept to the tagline and one thin streak."""
+    x, y = grid()
+    dens = smoke_density(183, sym=0.2, thresh=0.34, gain=2.6)
+    top = np.exp(-((y + 0.05) / 0.70) ** 2) * np.exp(-((x - 0.5) / 0.55) ** 2)
+    back = gauss2(x, y, 0.5, 0.40, 0.45, 0.30)
+    img = np.full((n, n, 3), 3.0, np.float32)
+    img += (dens * (0.6 * back + 0.5 * top))[..., None] * np.array([205, 208, 214]) * 0.55
+    img += (blur(dens * back, 18))[..., None] * np.array([200, 200, 210]) * 0.12
+    img = vignette(img, x, y, amt=0.88)
+    c = to_canvas(img, N)
+    c, box = place_logo(c, logo, N, 0.50, 0.38, halo=0.22)
+    c = streak(c, N, box[4], alpha=170)
+    return footer(c, N)
+
+
+def smoke_rays(logo, N):
+    """Light bursting from behind the logo, scattering through red smoke as volumetric rays."""
+    x, y = grid()
+    cy = 0.38
+    dens = smoke_density(191, sym=0.2, thresh=0.30, gain=2.4)
+    r = rays(x, y, 0.5, cy, 140, 23, 3.0)
+    fall = np.exp(-np.hypot(x - 0.5, (y - cy) * 1.1) / 0.30)
+    scat = r * fall * (0.25 + 0.95 * dens)
+    img = np.full((n, n, 3), 3.0, np.float32)
+    img += (dens * gauss2(x, y, 0.5, cy, 0.55, 0.40))[..., None] * RED * 0.45
+    img += scat[..., None] * np.array([255, 70, 60]) * 0.75
+    img += (scat * np.exp(-np.hypot(x - 0.5, y - cy) / 0.08))[..., None] * WARM * 0.6
+    img += (blur(scat, 10))[..., None] * RED * 0.25
+    img = vignette(img, x, y, amt=0.85)
+    c = to_canvas(img, N)
+    plate = Image.new("L", (N, N), 0)
+    ImageDraw.Draw(plate).rounded_rectangle([int(N * 0.26), int(N * (cy - 0.07)), int(N * 0.74), int(N * (cy + 0.09))], radius=int(N * 0.05), fill=170)
+    plate = plate.filter(ImageFilter.GaussianBlur(N * 0.035))
+    c = Image.alpha_composite(c, Image.merge("RGBA", (*Image.new("RGB", (N, N), (0, 0, 0)).split(), plate)))
+    c, box = place_logo(c, logo, N, 0.48, cy, halo=0.30)
+    return footer(c, N)
+
 STYLES = {
     "arena": style_arena, "inferno": style_inferno, "smoke": style_smoke,
     "gate": style_gate, "kinetic": style_kinetic, "concrete": style_concrete,
+    "smoke_ember": smoke_ember, "smoke_spotlight": smoke_spotlight, "smoke_rising": smoke_rising,
+    "smoke_crimson": smoke_crimson, "smoke_silver": smoke_silver, "smoke_rays": smoke_rays,
 }
 
 if __name__ == "__main__":
     logo_path, out_dir, N, which = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
     os.makedirs(out_dir, exist_ok=True)
     logo = load_logo(logo_path)
-    for i, name in enumerate(STYLES if which == "all" else [which]):
+    names = list(STYLES) if which == "all" else [k for k in STYLES if k.startswith(which[:-1])] if which.endswith("*") else which.split(",")
+    for i, name in enumerate(names):
         out = finish(STYLES[name](logo, N), N, seed=100 + i)
         stem = os.path.join(out_dir, f"S2S_Backdrop_{name}_8x8ft")
         out.save(stem + ".jpg", quality=95, dpi=(N / 96, N / 96), subsampling=0)
