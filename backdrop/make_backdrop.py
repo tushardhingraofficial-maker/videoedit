@@ -50,7 +50,11 @@ logo = Image.fromarray(la)
 logo = logo.crop(logo.getchannel("A").getbbox())
 lw = int(N * (0.50 if variant == "hero" else 0.36))
 lh = int(logo.height * lw / logo.width)
+src_w = logo.width
 logo = logo.resize((lw, lh), Image.LANCZOS)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from make_backdrop_styles import crisp
+logo = crisp(logo, lw / src_w)
 lx, ly = (N - lw) // 2, int(N * LOGO_CY - lh / 2)
 # barbell axis sits at ~ (491-342)/(738-342) of the cropped logo height
 bar_y = ly + int(lh * (491 - 342) / (738 - 342))
